@@ -1,0 +1,79 @@
+---
+- name: Create user with validation and logging
+  hosts: all
+  become: yes
+  vars:
+    username: snowdisk
+    user_uid: 4747
+    user_gid: 4747
+    user_password: "Default123$"
+    sudoers_file: "/etc/sudoers.d/{{ username }}"
+    log_messages: ""
+
+  tasks:
+
+    - name: Check if username exists
+      command: getent passwd {{ username }}
+      register: user_check
+      ignore_errors: yes
+
+    - name: Check if UID exists
+      command: getent passwd {{ user_uid }}
+      register: uid_check
+      ignore_errors: yes
+
+    - name: Fail if username already exists
+      fail:
+        msg: "ERROR: Username '{{ username }}' already exists"
+      when: user_check.rc == 0
+
+    - name: Fail if UID already exists
+      fail:
+        msg: "ERROR: UID '{{ user_uid }}' already exists"
+      when: uid_check.rc == 0
+
+    - name: Create group
+      group:
+        name: "{{ username }}"
+        gid: "{{ user_gid }}"
+
+    - name: Create user
+      user:
+        name: "{{ username }}"
+        uid: "{{ user_uid }}"
+        group: "{{ user_gid }}"
+        password: "{{ user_password | password_hash('sha512') }}"
+        shell: /bin/bash
+        create_home: yes
+
+    - name: Add sudoers entry (NOPASSWD)
+      copy:
+        dest: "{{ sudoers_file }}"
+        content: "{{ username }} ALL=(ALL) NOPASSWD:ALL\n"
+        owner: root
+        group: root
+        mode: '0440'
+        validate: /usr/sbin/visudo -cf %s
+
+    - name: Ensure AllowUsers contains username
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^AllowUsers'
+        line: "AllowUsers {{ username }}"
+        create: yes
+
+    - name: Ensure AllowGroups contains group
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^AllowGroups'
+        line: "AllowGroups {{ username }}"
+        create: yes
+
+    - name: Restart SSH service
+      service:
+        name: sshd
+        state: restarted
+
+    - name: Set success log message
+      set_fact:
+        log_messages: "SUCCESS: User {{ username }} created with UID {{ user_uid }} and sudo access configured"
